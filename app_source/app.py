@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from model import get_session, User
+from model import get_session, User,Document, Resource
+from sqlalchemy import or_
 
 # 先创建 app（最重要的一行）
 app = Flask(__name__)
@@ -53,10 +54,6 @@ FAKE_DOCS = [
 ]
 
 # 4️⃣ 路由 - 只保留用户认证相关和基本路由
-@app.route("/")
-def index():
-    return redirect(url_for("documents"))
-
 @app.route('/home')
 def home():
     return render_template('home.html')
@@ -130,18 +127,63 @@ def logout():
     return redirect(url_for("login"))
 
 # 基本路由 - 保持原有结构但不实现具体功能
+#假设：朝代你暂时放在 Document.document_region（因为你模型里没有 dynasty 字段）。如果你数据库里朝代在别的字段，把过滤字段换掉即可。
+# 路由 - 文书列表页 (展示根据搜索条件筛选出的文书列表)
 @app.route("/documents")
 def documents():
-    return render_template("documents.html", documents=FAKE_DOCS)
+    q = request.args.get("q", "").strip()
+    period = request.args.get("period", "").strip()
 
-@app.route("/documents/<int:doc_id>")
-def document_detail(doc_id):
-    doc = next((d for d in FAKE_DOCS if d["id"] == doc_id), None)
-    return render_template("document_detail.html", doc=doc, notes=[])
+    session = get_session()
+    try:
+        query = session.query(Document)
 
+        if q:
+            query = query.filter(Document.document_name.ilike(f"%{q}%"))
+        if period:
+            query = query.filter(Document.document_region == period)
+
+        docs = query.all()
+
+        # 获取该文书下的所有资源
+        resources = {}
+        for doc in docs:
+            resources[doc.document_id] = session.query(Resource).filter(Resource.document_id == doc.document_id).all()
+
+        return render_template("documents.html", documents=docs, resources=resources)
+    finally:
+        session.close()
+
+# 路由 - 文书资源页 (根据文书展示资源)
+@app.route("/document_resources/<int:document_id>")
+def document_resources(document_id):
+    session = get_session()
+    try:
+        document = session.get(Document, document_id)
+        if not document:
+            flash("未找到该文书", "error")
+            return redirect(url_for("documents"))
+
+        resources = session.query(Resource).filter(Resource.document_id == document_id).all()
+
+        # 分类显示资源
+        categories = {}
+        for resource in resources:
+            category = resource.resource_type  # 按资源类型分类
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(resource)
+
+        return render_template("document_resources.html", document=document, categories=categories)
+    finally:
+        session.close()
+
+# documents.html 的 form action 改成直接走 documents
 @app.route("/search")
 def search():
-    return render_template("search_results.html", results=FAKE_DOCS)
+    # 兼容：把 /search?q=xxx&period=xxx 转发到 /documents?q=xxx&period=xxx
+    return redirect(url_for("documents", **request.args))
+
 
 # 保留路由但不实现具体功能（由其他同学实现）
 @app.route("/favorites")
@@ -159,6 +201,11 @@ def notes():
 @app.route("/history")
 def history():
     return render_template("reading_history.html", history=[])
+#新增：首页展示 + 首页搜索直接跳到 /documents
+@app.route("/")
+def index():
+    return redirect(url_for("home"))
+
 
 # 5️⃣ 最后才 run
 if __name__ == "__main__":
