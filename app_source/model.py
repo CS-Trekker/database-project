@@ -25,17 +25,18 @@ from sqlalchemy import (
     create_engine,
     func,
     text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship, Session, sessionmaker
+from flask_login import UserMixin
 
 # ============================================================
 # 1. 数据库连接配置
 # ============================================================
-
 DB_HOST = "localhost"
 DB_PORT = 3306
 DB_USER = "root"
-DB_PASSWORD = "M17382930994c@"
+DB_PASSWORD = "M17382930994c@" #这里改为自己的密码
 DB_NAME = "our_document"
 
 DATABASE_URL = (
@@ -43,135 +44,188 @@ DATABASE_URL = (
     "?charset=utf8mb4"
 )
 
-# 创建 SQLAlchemy Engine 和 Session 工厂
 engine = create_engine(
     DATABASE_URL,
-    echo=False,  # 调试时可设为 True 观察 SQL
+    echo=False,
     future=True,
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-
 Base = declarative_base()
 
 
 def get_session() -> Session:
-    """获取一个新的数据库会话。调用方用完后需要手动关闭。"""
-
+    """获取数据库会话（调用方需手动关闭）"""
     return SessionLocal()
 
 
 # ============================================================
-# 2. ORM 模型定义
-#    对应 db.sql 中的各个表
+# 2. ORM 模型定义（严格对齐 db.sql）
 # ============================================================
-
-
-class User(Base):
-    """用户信息，对应表 user_info"""
-
+class User(Base, UserMixin):
+    """用户信息表 - user_info"""
     __tablename__ = "user_info"
 
-    user_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    username = Column(String(30), unique=True, nullable=False)
-    user_email = Column(String(30), unique=True, nullable=False)
-    password = Column(String(255), nullable=False)
-    pr_question = Column(Text)
-    pr_answer = Column(Text)
+    user_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='用户ID')
+    username = Column(String(30), unique=True, nullable=False, comment='用户名')
+    user_email = Column(String(30), unique=True, nullable=False, comment='用户邮箱')
+    password = Column(String(255), nullable=False, comment='密码')
+    pr_question = Column(Text, comment='找回密码问题')
+    pr_answer = Column(Text, comment='找回密码答案')
 
-    # 关系
+    # 关联关系
     notes = relationship("Note", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
+    access_records = relationship("AccessRecord", back_populates="user")
 
 
 class Document(Base):
-    """文书信息，对应表 document_info"""
-
+    """文书信息表 - document_info"""
     __tablename__ = "document_info"
 
-    document_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    document_name = Column(String(255), unique=True, nullable=False)
-    document_region = Column(String(255))
-    document_intro = Column(Text)
-    document_cover = Column(
-        # 实际存储为 BLOB，ORM 中可以按 bytes 类型映射
-        # 这里不直接操作封面图片，仅保留字段
-        # MySQL BLOB 默认映射为 LargeBinary
-        # 为简洁起见此处使用 Text/bytes 皆可，不影响查询示例
-        Text
-    )
+    document_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='文书ID')
+    document_name = Column(String(255), unique=True, nullable=False, comment='文书名称')
+    document_region = Column(String(255), comment='文书区域')
+    document_intro = Column(Text, comment='文书简介')
+    document_cover = Column(Text, comment='文书封面（二进制）')
 
-    # 关系
+    # 关联关系
     resources = relationship("Resource", back_populates="document")
-    # Note: notes和favorites现在通过resource间接访问（符合第三范式）
 
 
 class Resource(Base):
-    """资源内容，对应表 resource_content"""
-
+    """资源内容表 - resource_content"""
     __tablename__ = "resource_content"
 
-    resource_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    document_id = Column(BigInteger, ForeignKey("document_info.document_id"), nullable=False)
-    resource_name = Column(String(255), unique=True, nullable=False)
-    resource_type = Column(String(255))
-    original_text = Column(Text)
-    simplified_text = Column(Text)
-    vernacular_translation = Column(Text)
+    resource_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='资源ID')
+    document_id = Column(BigInteger, ForeignKey("document_info.document_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='文书ID')
+    resource_name = Column(String(255), unique=True, nullable=False, comment='资源名称')
+    resource_type = Column(String(255), comment='资源类型')
+    original_text = Column(Text, comment='原文')
+    simplified_text = Column(Text, comment='简体版全文')
+    vernacular_translation = Column(Text, comment='白话文翻译')
 
+    # 关联关系
     document = relationship("Document", back_populates="resources")
+    info = relationship("ResourceInfo", back_populates="resource", uselist=False)
+    images = relationship("ResourceImage", back_populates="resource")
+    carrier = relationship("ResourceCarrier", back_populates="resource", uselist=False)
     notes = relationship("Note", back_populates="resource")
     favorites = relationship("Favorite", back_populates="resource")
+    access_records = relationship("AccessRecord", back_populates="resource")
 
 
-class Note(Base):
-    """用户笔记，对应表 annotation"""
+class ResourceInfo(Base):
+    """资源信息表 - resource_info"""
+    __tablename__ = "resource_info"
 
-    __tablename__ = "annotation"
+    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id", ondelete="CASCADE", onupdate="CASCADE"), primary_key=True, comment='资源ID')
+    dynasty_period = Column(String(255), comment='年代')
+    reign_title = Column(String(255), comment='年号')
+    resource_region = Column(String(255), comment='资源区域')
+    household_registry = Column(String(255), comment='归户')
+    author = Column(String(100), comment='作者')
 
-    annotation_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("user_info.user_id"), nullable=False)
-    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id"), nullable=False)
-    annotation_content = Column(Text)
-    annotation_tags = Column(String(20))
-    annotation_time = Column(DateTime, default=datetime.utcnow, nullable=False)
-    update_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # 关联关系
+    resource = relationship("Resource", back_populates="info")
 
-    user = relationship("User", back_populates="notes")
-    resource = relationship("Resource", back_populates="notes")
-    
-    # 通过resource访问document（消除传递依赖）
-    @property
-    def document(self):
-        """通过resource访问document"""
-        return self.resource.document if self.resource else None
+
+class ResourceImage(Base):
+    """资源图片表 - resource_image"""
+    __tablename__ = "resource_image"
+
+    image_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='图片ID')
+    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='资源ID')
+    page = Column(BigInteger, comment='页码')
+
+    # 关联关系
+    resource = relationship("Resource", back_populates="images")
+
+
+class ResourceCarrier(Base):
+    """资源载体表 - resource_carrier"""
+    __tablename__ = "resource_carrier"
+
+    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id", ondelete="CASCADE", onupdate="CASCADE"), primary_key=True, comment='资源ID')
+    resource_material = Column(String(255), comment='文献材质')
+    resource_dimensions = Column(String(255), comment='文献尺寸')
+
+    # 关联关系
+    resource = relationship("Resource", back_populates="carrier")
 
 
 class Favorite(Base):
-    """收藏信息，对应表 collection_info"""
-
+    """收藏信息表 - collection_info"""
     __tablename__ = "collection_info"
 
-    collection_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("user_info.user_id"), nullable=False)
-    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id"), nullable=False)
-    collection_tags = Column(String(20))
-    collection_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # 唯一约束（对齐db.sql）
+    __table_args__ = (
+        UniqueConstraint('user_id', 'resource_id', name='uk_user_resource'),
+    )
 
+    collection_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='收藏ID')
+    user_id = Column(BigInteger, ForeignKey("user_info.user_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='用户ID')
+    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='资源ID')
+    collection_tags = Column(String(20), comment='收藏标签')
+    collection_time = Column(DateTime, default=datetime.utcnow, nullable=False, comment='收藏时间')
+
+    # 关联关系
     user = relationship("User", back_populates="favorites")
     resource = relationship("Resource", back_populates="favorites")
-    
-    # 通过resource访问document（消除传递依赖）
+
     @property
     def document(self):
-        """通过resource访问document"""
         return self.resource.document if self.resource else None
 
 
-# 视图模型（只读），以文书资源统计视图为例
-class DocumentStats(Base):
-    """文书统计视图，对应视图 v_document_resource_stats（只读）"""
+class Note(Base):
+    """笔记表 - annotation"""
+    __tablename__ = "annotation"
 
+    annotation_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='笔记ID')
+    user_id = Column(BigInteger, ForeignKey("user_info.user_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='用户ID')
+    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='资源ID')
+    annotation_content = Column(Text, comment='笔记内容')
+    annotation_tags = Column(String(20), comment='笔记标签')
+    annotation_time = Column(DateTime, default=datetime.utcnow, nullable=False, comment='创建时间')
+    update_time = Column(DateTime, default=datetime.utcnow, nullable=False, comment='更新时间')
+
+    # 关联关系
+    user = relationship("User", back_populates="notes")
+    resource = relationship("Resource", back_populates="resource")
+
+    @property
+    def document(self):
+        return self.resource.document if self.resource else None
+
+
+class AccessRecord(Base):
+    """阅读记录表 - access_record（替换原ReadRecord）"""
+    __tablename__ = "access_record"
+
+    # 唯一约束（对齐db.sql）
+    __table_args__ = (
+        UniqueConstraint('user_id', 'resource_id', name='uk_user_resource'),
+    )
+
+    access_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='阅读记录ID')
+    user_id = Column(BigInteger, ForeignKey("user_info.user_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='用户ID')
+    resource_id = Column(BigInteger, ForeignKey("resource_content.resource_id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False, comment='资源ID')
+    access_time = Column(DateTime, default=datetime.utcnow, nullable=False, comment='访问时间')
+    read_progress = Column(Integer, default=0, comment='阅读进度（扩展字段）')
+
+    # 关联关系
+    user = relationship("User", back_populates="access_records")
+    resource = relationship("Resource", back_populates="access_records")
+
+    @property
+    def document(self):
+        return self.resource.document if self.resource else None
+
+
+# 视图模型（只读，对齐db.sql的视图）
+class DocumentStats(Base):
+    """文书统计视图 - v_document_resource_stats"""
     __tablename__ = "v_document_resource_stats"
     __table_args__ = {"info": {"is_view": True}}
 
@@ -185,13 +239,10 @@ class DocumentStats(Base):
 
 
 # ============================================================
-# 3. 基本查询功能（对应题目 b.i ~ b.vi）
+# 3. 基础查询功能（对齐db.sql的业务需求）
 # ============================================================
-
-
 def get_resources_by_document(session: Session, document_id: int) -> List[Resource]:
-    """b.i 查询某一文书的所有资源列表"""
-
+    """查询某文书的所有资源"""
     return (
         session.query(Resource)
         .filter(Resource.document_id == document_id)
@@ -201,24 +252,15 @@ def get_resources_by_document(session: Session, document_id: int) -> List[Resour
 
 
 def get_documents_by_author(session: Session, author: str) -> List[Document]:
-    """
-    b.ii 查询特定作者的所有文书
-
-    说明：作者字段在 resource_info（资源信息表）中，这里通过原生 SQL 进行一次简单关联查询：
-    document_info ← resource_content ← resource_info
-    """
-
-    sql = text(
-        """
+    """查询特定作者的所有文书（关联resource_info）"""
+    sql = text("""
         SELECT DISTINCT d.*
         FROM document_info d
         JOIN resource_content rc ON d.document_id = rc.document_id
         JOIN resource_info ri ON rc.resource_id = ri.resource_id
         WHERE ri.author = :author
-        """
-    )
+    """)
     result = session.execute(sql, {"author": author})
-    # 使用 ORM 的映射加载 Document
     document_ids = [row.document_id for row in result]
     if not document_ids:
         return []
@@ -231,13 +273,7 @@ def get_documents_by_author(session: Session, author: str) -> List[Document]:
 
 
 def search_transcription_by_keyword(session: Session, keyword: str) -> List[Resource]:
-    """
-    b.iii 查询包含特定关键词的转录文本
-
-    这里使用 LIKE 方式在 simplified_text / vernacular_translation 中模糊匹配。
-    （如果已建立全文索引，可使用 fulltext_search_resources 函数）
-    """
-
+    """模糊查询包含关键词的转录文本"""
     pattern = f"%{keyword}%"
     return (
         session.query(Resource)
@@ -250,8 +286,7 @@ def search_transcription_by_keyword(session: Session, keyword: str) -> List[Reso
 
 
 def get_favorite_documents_by_user(session: Session, user_id: int) -> List[Document]:
-    """b.iv 查询某个用户收藏的文书"""
-
+    """查询用户收藏的文书"""
     return (
         session.query(Document)
         .join(Resource, Resource.document_id == Document.document_id)
@@ -264,60 +299,34 @@ def get_favorite_documents_by_user(session: Session, user_id: int) -> List[Docum
 
 
 def count_resources_by_document(session: Session, document_id: int) -> int:
-    """b.v 统计某个文书的资源数量"""
-
+    """统计文书的资源数量"""
     return (
         session.query(func.count(Resource.resource_id))
         .filter(Resource.document_id == document_id)
-        .scalar()
-        or 0
+        .scalar() or 0
     )
 
 
-def count_resources_by_document_and_type(
-    session: Session, document_id: int, resource_type: str
-) -> int:
-    """b.vi 统计某个文书中某种类型文书资源数量"""
-
+def count_resources_by_document_and_type(session: Session, document_id: int, resource_type: str) -> int:
+    """统计文书中指定类型的资源数量"""
     return (
         session.query(func.count(Resource.resource_id))
         .filter(
             Resource.document_id == document_id,
-            Resource.resource_type == resource_type,
+            Resource.resource_type == resource_type
         )
-        .scalar()
-        or 0
+        .scalar() or 0
     )
 
 
 # ============================================================
-# 4. 高级功能：存储过程 / 触发器 / 视图 / 全文检索
+# 4. 高级功能：存储过程/触发器/全文索引（对齐db.sql）
 # ============================================================
-
-
 def init_advanced_db_features(session: Session) -> None:
-    """
-    在数据库中初始化高级特性：
-    - 存储过程：批量插入新的文书及其资源
-    - 触发器：自动维护 annotation 表的时间字段
-    - 全文索引：为资源转录文本建立 FULLTEXT 索引
-
-    注意：该函数设计为幂等，多次执行不会报错（利用 IF NOT EXISTS 判断）。
-    """
-
-    # 1) 存储过程：批量导入新文书记录（示例）
-    # 作用：接收文书名称和简介，插入 document_info，并返回新 ID
-    session.execute(
-        text(
-            """
-        DROP PROCEDURE IF EXISTS sp_insert_document;
-        """
-        )
-    )
-
-    session.execute(
-        text(
-            """
+    """初始化数据库高级特性（幂等设计）"""
+    # 1. 存储过程：插入文书
+    session.execute(text("DROP PROCEDURE IF EXISTS sp_insert_document;"))
+    session.execute(text("""
         CREATE PROCEDURE sp_insert_document(
             IN p_name VARCHAR(255),
             IN p_region VARCHAR(255),
@@ -328,17 +337,12 @@ def init_advanced_db_features(session: Session) -> None:
             VALUES(p_name, p_region, p_intro);
             SELECT LAST_INSERT_ID() AS document_id;
         END;
-        """
-        )
-    )
+    """))
 
-    # 2) 触发器：自动维护 annotation 的时间字段
+    # 2. 触发器：维护笔记时间字段
     session.execute(text("DROP TRIGGER IF EXISTS trg_annotation_before_insert;"))
     session.execute(text("DROP TRIGGER IF EXISTS trg_annotation_before_update;"))
-
-    session.execute(
-        text(
-            """
+    session.execute(text("""
         CREATE TRIGGER trg_annotation_before_insert
         BEFORE INSERT ON annotation
         FOR EACH ROW
@@ -348,71 +352,50 @@ def init_advanced_db_features(session: Session) -> None:
             END IF;
             SET NEW.update_time = NEW.annotation_time;
         END;
-        """
-        )
-    )
-
-    session.execute(
-        text(
-            """
+    """))
+    session.execute(text("""
         CREATE TRIGGER trg_annotation_before_update
         BEFORE UPDATE ON annotation
         FOR EACH ROW
         BEGIN
             SET NEW.update_time = NOW();
         END;
-        """
-        )
-    )
+    """))
 
-    # 3) 全文索引：在资源转录文本上建立 FULLTEXT 索引
-    # MySQL 5.6+ InnoDB 支持 FULLTEXT，注意只在文本字段上建立。
-    session.execute(
-        text(
-            """
-        ALTER TABLE resource_content
-        ADD FULLTEXT INDEX IF NOT EXISTS ft_resource_text
-        (original_text, simplified_text, vernacular_translation);
-        """
-        )
-    )
+    # 3. 全文索引（对齐db.sql的注释）
+    session.execute(text("""
+        ALTER TABLE resource_content ADD FULLTEXT INDEX IF NOT EXISTS ft_original_text (original_text);
+        ALTER TABLE resource_content ADD FULLTEXT INDEX IF NOT EXISTS ft_simplified_text (simplified_text);
+        ALTER TABLE resource_content ADD FULLTEXT INDEX IF NOT EXISTS ft_vernacular_translation (vernacular_translation);
+        ALTER TABLE document_info ADD FULLTEXT INDEX IF NOT EXISTS ft_document_intro (document_intro);
+        ALTER TABLE annotation ADD FULLTEXT INDEX IF NOT EXISTS ft_annotation_content (annotation_content);
+    """))
+
+    # 4. 补充阅读进度字段（扩展db.sql）
+    session.execute(text("""
+        ALTER TABLE access_record 
+        ADD COLUMN IF NOT EXISTS read_progress INT DEFAULT 0 COMMENT '阅读进度' AFTER access_time;
+    """))
 
     session.commit()
 
 
-def call_insert_document_procedure(
-    session: Session, name: str, region: Optional[str], intro: Optional[str]
-) -> int:
-    """
-    调用存储过程 sp_insert_document，插入一条文书记录并返回新 document_id。
-    （对应高级功能 c.i 存储）
-    """
-
-    result = session.execute(
-        text("CALL sp_insert_document(:name, :region, :intro);"),
-        {"name": name, "region": region, "intro": intro},
-    )
+def call_insert_document_procedure(session: Session, name: str, region: Optional[str], intro: Optional[str]) -> int:
+    """调用存储过程插入文书"""
+    result = session.execute(text("CALL sp_insert_document(:name, :region, :intro);"),
+                             {"name": name, "region": region, "intro": intro})
     row = result.fetchone()
-    # 存储过程中 SELECT LAST_INSERT_ID() AS document_id
     return int(row.document_id) if row and hasattr(row, "document_id") else 0
 
 
 def fulltext_search_resources(session: Session, keyword: str) -> List[Resource]:
-    """
-    使用 MySQL FULLTEXT 进行全文检索（对应高级功能 c.iv 全文检索）。
-
-    依赖：已经通过 init_advanced_db_features 建立 FULLTEXT 索引。
-    """
-
-    # MATCH AGAINST 只能通过 text() 写原生 SQL
-    sql = text(
-        """
+    """全文检索资源文本"""
+    sql = text("""
         SELECT *
         FROM resource_content
         WHERE MATCH(original_text, simplified_text, vernacular_translation)
               AGAINST (:kw IN NATURAL LANGUAGE MODE)
-        """
-    )
+    """)
     result = session.execute(sql, {"kw": keyword})
     resource_ids = [row.resource_id for row in result]
     if not resource_ids:
@@ -425,27 +408,15 @@ def fulltext_search_resources(session: Session, keyword: str) -> List[Resource]:
 
 
 def get_document_stats(session: Session) -> List[DocumentStats]:
-    """
-    示例：通过视图 v_document_resource_stats 查询文书的资源/收藏/笔记统计信息。
-    （对应高级功能 c.iii 视图）
-    """
-
+    """查询文书统计视图"""
     return session.query(DocumentStats).order_by(DocumentStats.document_id).all()
 
 
 # ============================================================
-# 5. 文书的增删改查封装（示例）
+# 5. 文书CRUD
 # ============================================================
-
-
-def create_document(
-    session: Session,
-    name: str,
-    region: Optional[str] = None,
-    intro: Optional[str] = None,
-) -> Document:
-    """创建（新增）文书记录"""
-
+def create_document(session: Session, name: str, region: Optional[str] = None, intro: Optional[str] = None) -> Document:
+    """创建文书"""
     doc = Document(document_name=name, document_region=region, document_intro=intro)
     session.add(doc)
     session.commit()
@@ -454,39 +425,28 @@ def create_document(
 
 
 def get_document_by_id(session: Session, document_id: int) -> Optional[Document]:
-    """按主键查询单个文书"""
-
+    """按ID查询文书"""
     return session.get(Document, document_id)
 
 
-def update_document(
-    session: Session,
-    document_id: int,
-    name: Optional[str] = None,
-    region: Optional[str] = None,
-    intro: Optional[str] = None,
-) -> Optional[Document]:
-    """编辑（更新）文书信息"""
-
+def update_document(session: Session, document_id: int, name: Optional[str] = None, region: Optional[str] = None, intro: Optional[str] = None) -> Optional[Document]:
+    """更新文书"""
     doc = session.get(Document, document_id)
     if not doc:
         return None
-
     if name is not None:
         doc.document_name = name
     if region is not None:
         doc.document_region = region
     if intro is not None:
         doc.document_intro = intro
-
     session.commit()
     session.refresh(doc)
     return doc
 
 
 def delete_document(session: Session, document_id: int) -> bool:
-    """删除文书（级联删除其资源、收藏、笔记等，依赖外键的 ON DELETE CASCADE 设置）"""
-
+    """删除文书"""
     doc = session.get(Document, document_id)
     if not doc:
         return False
@@ -496,24 +456,152 @@ def delete_document(session: Session, document_id: int) -> bool:
 
 
 # ============================================================
-# 6. 简单演示（可选）
-#    直接运行本文件时，可做一次连通性与功能测试
+# 6. 笔记操作函数
 # ============================================================
+def create_note(session: Session, user_id: int, resource_id: int, content: str, tags: Optional[str] = None) -> Note:
+    """创建笔记"""
+    note = Note(
+        user_id=user_id,
+        resource_id=resource_id,
+        annotation_content=content,
+        annotation_tags=tags
+    )
+    session.add(note)
+    session.commit()
+    session.refresh(note)
+    return note
 
+
+def get_notes_by_user(session: Session, user_id: int) -> List[Note]:
+    """查询用户所有笔记"""
+    return (
+        session.query(Note)
+        .filter(Note.user_id == user_id)
+        .order_by(Note.update_time.desc())
+        .all()
+    )
+
+
+def get_notes_by_resource(session: Session, resource_id: int) -> List[Note]:
+    """查询资源的所有笔记"""
+    return (
+        session.query(Note)
+        .filter(Note.resource_id == resource_id)
+        .order_by(Note.annotation_time.desc())
+        .all()
+    )
+
+
+def update_note(session: Session, note_id: int, content: Optional[str] = None, tags: Optional[str] = None) -> Optional[Note]:
+    """更新笔记"""
+    note = session.get(Note, note_id)
+    if not note:
+        return None
+    if content is not None:
+        note.annotation_content = content
+    if tags is not None:
+        note.annotation_tags = tags
+    session.commit()
+    session.refresh(note)
+    return note
+
+
+def delete_note(session: Session, note_id: int) -> bool:
+    """删除笔记"""
+    note = session.get(Note, note_id)
+    if not note:
+        return False
+    session.delete(note)
+    session.commit()
+    return True
+
+
+# ============================================================
+# 7. 收藏操作函数
+# ============================================================
+def toggle_favorite(session: Session, user_id: int, resource_id: int, tags: Optional[str] = None) -> Tuple[bool, bool]:
+    """切换收藏状态（有则取消，无则添加）"""
+    favorite = session.query(Favorite).filter(
+        Favorite.user_id == user_id,
+        Favorite.resource_id == resource_id
+    ).first()
+
+    if favorite:
+        # 取消收藏
+        session.delete(favorite)
+        session.commit()
+        return True, False
+    else:
+        # 添加收藏
+        new_fav = Favorite(
+            user_id=user_id,
+            resource_id=resource_id,
+            collection_tags=tags
+        )
+        session.add(new_fav)
+        session.commit()
+        return True, True
+
+
+def is_resource_favorited(session: Session, user_id: int, resource_id: int) -> bool:
+    """判断资源是否被用户收藏"""
+    return session.query(Favorite).filter(
+        Favorite.user_id == user_id,
+        Favorite.resource_id == resource_id
+    ).first() is not None
+
+
+# ============================================================
+# 8. 阅读记录操作函数
+# ============================================================
+def create_access_record(session: Session, user_id: int, resource_id: int, progress: int = 0) -> AccessRecord:
+    """创建/更新阅读记录（UPSERT）"""
+    record = session.query(AccessRecord).filter(
+        AccessRecord.user_id == user_id,
+        AccessRecord.resource_id == resource_id
+    ).first()
+
+    if record:
+        # 更新现有记录
+        record.access_time = datetime.utcnow()
+        record.read_progress = progress
+    else:
+        # 新建记录
+        record = AccessRecord(
+            user_id=user_id,
+            resource_id=resource_id,
+            read_progress=progress
+        )
+        session.add(record)
+
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+def get_access_records_by_user(session: Session, user_id: int) -> List[AccessRecord]:
+    """查询用户所有阅读记录"""
+    return (
+        session.query(AccessRecord)
+        .filter(AccessRecord.user_id == user_id)
+        .order_by(AccessRecord.access_time.desc())
+        .all()
+    )
+
+
+# ============================================================
+# 9. 测试入口
+# ============================================================
 if __name__ == "__main__":
-    # 简单自测：仅在命令行执行 python model.py 时运行
     with get_session() as s:
-        # 初始化高级特性（若已在数据库中创建过，可注释掉）
         try:
             init_advanced_db_features(s)
-        except Exception as exc:  # pragma: no cover - 仅用于调试输出
-            print("初始化高级特性时出错：", exc)
-
-        # 打印当前文书统计信息（来自视图）
-        stats: List[Tuple[int, str, int]] = [
-            (st.document_id, st.document_name, st.resource_count)
-            for st in get_document_stats(s)
-        ]
-        print("当前文书统计（document_id, document_name, resource_count）:", stats)
-
-
+            print("数据库高级特性初始化成功！")
+            
+            # 打印文书统计
+            stats = get_document_stats(s)
+            print(f"当前文书数量：{len(stats)}")
+            for stat in stats:
+                print(f"文书ID: {stat.document_id}, 名称: {stat.document_name}, 资源数: {stat.resource_count}")
+        except Exception as e:
+            print(f"初始化失败：{str(e)}")
